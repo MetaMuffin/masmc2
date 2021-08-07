@@ -1,6 +1,7 @@
 import { readFileSync } from "fs";
 import { join } from "path/posix";
-import { jump_mark, split1br, temp_var } from "./helper";
+import { BUILTIN_FUNCTIONS } from "./builtins";
+import { func_label, func_return, func_return_value, jump_mark, MASM_COUNTER, split1, split1br, splitbr, temp_var } from "./helper";
 
 
 const ops = [
@@ -24,6 +25,12 @@ const ops_assign = [
     ["%", "mod"],
 ]
 
+export interface FunctionDecl {
+    name: string,
+    args: string[],
+}
+
+export const functions: Map<string, FunctionDecl> = new Map()
 
 export interface TResult { code: string, result: string }
 
@@ -35,12 +42,12 @@ export function t_expr(expr: string, target?: string): TResult {
     if (target) target = target.trim()
     expr = expr.trim()
     const target_temp = target ?? temp_var()
-
+    
     if (/^\d+$/.test(expr)) {
         const n = parseInt(expr)
         return assign_target(n.toString(), target)
     }
-
+    
     for (const [op, mode] of ops) {
         let [l, r] = split1br(expr, op)
         if (r) {
@@ -49,17 +56,40 @@ export function t_expr(expr: string, target?: string): TResult {
             return { code: lt.code + rt.code + `op ${mode} ${target_temp} ${lt.result} ${rt.result}\n`, result: target_temp }
         }
     }
+    
+    if (/^\w+\(.+\)$/.test(expr)) {
+        const func_name = split1(expr, "(")[0]
+        const args_raw = split1(expr, "(")[1]?.split(")").join("")
+        if (!args_raw) throw new Error("aaaaaaaa " + expr);
+        const args = splitbr(args_raw, ",")
+        
+        const builtin = BUILTIN_FUNCTIONS[func_name]
+        if (builtin) { return builtin(...args) }
 
-    if (expr.split(" ").length < 2) return assign_target(expr, target)
+        const func = functions.get(func_name)
+        if (!func) throw new Error(`unknown function "${func_name}" in expression "${expr}"`);
+        if (args.length != func.args.length) console.warn("argument count mismatch in call to " + func_name)
 
+        let output = ""
+        for (let i = 0; i < args.length; i++) {
+            const value = args[i];
+            const name = func.args[i];
+            output += t_expr(value, name).code
+        }
+        output += `op add ${func_return(func_name)} ${MASM_COUNTER} 2`
+        output += `jump always ${func_label(func_name)}`
+        return { code: output, result: func_return_value(func_name) }
+    }
+
+    if (splitbr(expr, " ").length < 2) return assign_target(expr, target)
     throw new Error("invalid expression: " + expr);
 }
 
 export function t_line(line: string): string {
     line = line.trim()
     let vari, expr;
-
-
+    
+    
     for (const [op, mode] of ops_assign) {
         [vari, expr] = split1br(line, op + "=").map(s => s?.trim());
         if (expr) {
@@ -67,11 +97,11 @@ export function t_line(line: string): string {
             return r.code + `op ${mode} ${vari} ${vari} ${r.result}\n`
         }
     }
-
+    
     [vari, expr] = split1br(line, "=");
     if (expr) return t_expr(expr, vari).code;
-
-    throw new Error("aaaaaaaaaa: " + line);
+    
+    return t_expr(line).code
 }
 
 export function t_compound(lines: string[]): string {
@@ -87,7 +117,7 @@ export function t_compound(lines: string[]): string {
             return sub
         }
 
-        if (l.startsWith("if")) {
+        if (l.startsWith("if ")) {
             const condition = t_expr(l.substring(3, l.length - 1))
             const [mark_decl, mark_ref] = jump_mark()
             const [mark_decl_else, mark_ref_else] = jump_mark()
@@ -106,18 +136,43 @@ export function t_compound(lines: string[]): string {
             continue
         }
 
-        if (l.startsWith("while")) {
+        if (l.startsWith("while ")) {
             const condition = t_expr(l.substring("while ".length, l.length - 1))
             const [mark_start_decl, mark_start_ref] = jump_mark()
             const [mark_end_decl, mark_end_ref] = jump_mark()
             const body = read_ident_stmt()
             const body_code = t_compound(body)
 
-            output += condition.code + mark_start_decl + `jump ${mark_end_ref} notEqual ${condition.result} 1\n`
+            output += mark_start_decl + condition.code + `jump ${mark_end_ref} notEqual ${condition.result} 1\n`
             output += body_code + `jump ${mark_start_ref} always\n` + mark_end_decl
             continue
         }
 
+        if (l.startsWith("for ")) {
+            const [vari, iterator] = l.substring("for ".length, l.length - 1).split(" in ").map(s => s.trim())
+            if (iterator.startsWith("range(")) {
+                let [start, stop, step] = splitbr(iterator.substring("range(".length, iterator.length - ")".length), ",").map(s => s.trim())
+                step ??= "1"
+                if (!stop) stop = start, start = "0"
+                const [start_r, stop_r, step_r] = [start, stop, step].map(s => t_expr(s))
+                output += start_r.code + stop_r.code + step_r.code;
+
+                output += `set ${vari} ${start_r.result}\n`
+                const condition = t_expr(`${vari} < ${stop_r.result}`)
+                const [mark_start_decl, mark_start_ref] = jump_mark()
+                const [mark_end_decl, mark_end_ref] = jump_mark()
+                const body = read_ident_stmt()
+                const body_code = t_compound(body) + t_line(`${vari} += ${step_r.result}`)
+
+                output += mark_start_decl + condition.code + `jump ${mark_end_ref} notEqual ${condition.result} 1\n`
+                output += body_code + `jump ${mark_start_ref} always\n` + mark_end_decl
+                continue
+            }
+        }
+
+        if (l.startsWith("def ")) {
+
+        }
 
         output += t_line(l)
     }
