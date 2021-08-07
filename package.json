@@ -1,0 +1,9 @@
+{
+  "name": "masmc2",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "dependencies": {
+    "@types/node": "^16.4.13"
+  }
+}
