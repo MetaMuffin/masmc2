@@ -1,8 +1,7 @@
 import { readFileSync } from "fs";
 import { join } from "path/posix";
 import { BUILTIN_FUNCTIONS } from "./builtins";
-import { func_label, func_return, func_return_value, jump_mark, MASM_COUNTER, split1, split1br, splitbr, temp_var } from "./helper";
-
+import { func_jump_mark, func_return, func_return_value, jump_mark, MASM_PC, split1, split1br, splitbr, temp_var } from "./helper";
 
 const ops = [
     ["==", "equal"],
@@ -34,35 +33,40 @@ export const functions: Map<string, FunctionDecl> = new Map()
 
 export interface TResult { code: string, result: string }
 
+export interface TContext {
+    function?: string
+    loop_break?: string
+}
+
 export function assign_target(value: string, target?: string): TResult {
     return target ? { code: `set ${target} ${value}\n`, result: target } : { code: "", result: value }
 }
 
-export function t_expr(expr: string, target?: string): TResult {
+export function t_expr(ctx: TContext, expr: string, target?: string): TResult {
     if (target) target = target.trim()
     expr = expr.trim()
     const target_temp = target ?? temp_var()
-    
+
     if (/^\d+$/.test(expr)) {
         const n = parseInt(expr)
         return assign_target(n.toString(), target)
     }
-    
+
     for (const [op, mode] of ops) {
         let [l, r] = split1br(expr, op)
         if (r) {
-            const lt = t_expr(l)
-            const rt = t_expr(r)
+            const lt = t_expr(ctx, l)
+            const rt = t_expr(ctx, r)
             return { code: lt.code + rt.code + `op ${mode} ${target_temp} ${lt.result} ${rt.result}\n`, result: target_temp }
         }
     }
-    
+
     if (/^\w+\(.+\)$/.test(expr)) {
         const func_name = split1(expr, "(")[0]
         const args_raw = split1(expr, "(")[1]?.split(")").join("")
         if (!args_raw) throw new Error("aaaaaaaa " + expr);
         const args = splitbr(args_raw, ",")
-        
+
         const builtin = BUILTIN_FUNCTIONS[func_name]
         if (builtin) { return builtin(...args) }
 
@@ -74,10 +78,10 @@ export function t_expr(expr: string, target?: string): TResult {
         for (let i = 0; i < args.length; i++) {
             const value = args[i];
             const name = func.args[i];
-            output += t_expr(value, name).code
+            output += t_expr(ctx, value, name).code
         }
-        output += `op add ${func_return(func_name)} ${MASM_COUNTER} 2`
-        output += `jump always ${func_label(func_name)}`
+        output += `op add ${func_return(func_name)} ${MASM_PC} 2\n`
+        output += `jump ${func_jump_mark(func_name).ref} always\n`
         return { code: output, result: func_return_value(func_name) }
     }
 
@@ -85,26 +89,37 @@ export function t_expr(expr: string, target?: string): TResult {
     throw new Error("invalid expression: " + expr);
 }
 
-export function t_line(line: string): string {
+export function t_line(ctx: TContext, line: string): string {
     line = line.trim()
     let vari, expr;
-    
-    
+
+
     for (const [op, mode] of ops_assign) {
         [vari, expr] = split1br(line, op + "=").map(s => s?.trim());
         if (expr) {
-            const r = t_expr(expr)
+            const r = t_expr(ctx, expr)
             return r.code + `op ${mode} ${vari} ${vari} ${r.result}\n`
         }
     }
-    
+
     [vari, expr] = split1br(line, "=");
-    if (expr) return t_expr(expr, vari).code;
-    
-    return t_expr(line).code
+    if (expr) return t_expr(ctx, expr, vari).code;
+
+    if (line == "return") {
+        if (!ctx.function) throw new Error("return outside of function");
+        return `set ${MASM_PC} ${func_return(ctx.function)}\n`
+    }
+
+    if (line.startsWith("return ")) {
+        if (!ctx.function) throw new Error("return outside of function");
+        const value = t_expr(ctx, line.substr("return ".length))
+        return value.code + `set ${func_return_value(ctx.function)} ${value.result}\n` + `set ${MASM_PC} ${func_return(ctx.function)}`
+    }
+
+    return t_expr(ctx, line).code
 }
 
-export function t_compound(lines: string[]): string {
+export function t_compound(ctx: TContext, lines: string[]): string {
     let output = ""
     for (let i = 0; i < lines.length; i++) {
         const l = lines[i];
@@ -118,11 +133,11 @@ export function t_compound(lines: string[]): string {
         }
 
         if (l.startsWith("if ")) {
-            const condition = t_expr(l.substring(3, l.length - 1))
+            const condition = t_expr(ctx, l.substring(3, l.length - 1))
             const [mark_decl, mark_ref] = jump_mark()
             const [mark_decl_else, mark_ref_else] = jump_mark()
             const body = read_ident_stmt()
-            const body_code = t_compound(body)
+            const body_code = t_compound(ctx, body)
             const has_else = lines[i + 1]?.startsWith("else")
             output += condition.code + `jump ${mark_ref} notEqual ${condition.result} 1\n`
             output += body_code
@@ -130,18 +145,18 @@ export function t_compound(lines: string[]): string {
             output += mark_decl
             if (has_else) {
                 i++; const else_body = read_ident_stmt()
-                const else_body_code = t_compound(else_body)
+                const else_body_code = t_compound(ctx, else_body)
                 output += else_body_code + mark_decl_else
             }
             continue
         }
 
         if (l.startsWith("while ")) {
-            const condition = t_expr(l.substring("while ".length, l.length - 1))
+            const condition = t_expr(ctx, l.substring("while ".length, l.length - 1))
             const [mark_start_decl, mark_start_ref] = jump_mark()
             const [mark_end_decl, mark_end_ref] = jump_mark()
             const body = read_ident_stmt()
-            const body_code = t_compound(body)
+            const body_code = t_compound({ ...ctx, loop_break: mark_end_ref }, body)
 
             output += mark_start_decl + condition.code + `jump ${mark_end_ref} notEqual ${condition.result} 1\n`
             output += body_code + `jump ${mark_start_ref} always\n` + mark_end_decl
@@ -154,15 +169,15 @@ export function t_compound(lines: string[]): string {
                 let [start, stop, step] = splitbr(iterator.substring("range(".length, iterator.length - ")".length), ",").map(s => s.trim())
                 step ??= "1"
                 if (!stop) stop = start, start = "0"
-                const [start_r, stop_r, step_r] = [start, stop, step].map(s => t_expr(s))
+                const [start_r, stop_r, step_r] = [start, stop, step].map(s => t_expr(ctx, s))
                 output += start_r.code + stop_r.code + step_r.code;
 
                 output += `set ${vari} ${start_r.result}\n`
-                const condition = t_expr(`${vari} < ${stop_r.result}`)
+                const condition = t_expr(ctx, `${vari} < ${stop_r.result}`)
                 const [mark_start_decl, mark_start_ref] = jump_mark()
                 const [mark_end_decl, mark_end_ref] = jump_mark()
                 const body = read_ident_stmt()
-                const body_code = t_compound(body) + t_line(`${vari} += ${step_r.result}`)
+                const body_code = t_compound({ ...ctx, loop_break: mark_end_ref }, body) + t_line(ctx, `${vari} += ${step_r.result}`)
 
                 output += mark_start_decl + condition.code + `jump ${mark_end_ref} notEqual ${condition.result} 1\n`
                 output += body_code + `jump ${mark_start_ref} always\n` + mark_end_decl
@@ -171,10 +186,21 @@ export function t_compound(lines: string[]): string {
         }
 
         if (l.startsWith("def ")) {
+            const func_decl_raw = l.substring("def ".length, l.length - ":".length)
+            const func_name = split1(func_decl_raw, "(")[0]
+            const args_raw = split1(func_decl_raw, "(")[1]?.split(")").join("")
+            if (!args_raw) throw new Error("aaaaaaaa " + func_decl_raw);
+            const args = splitbr(args_raw, ",")
+            const [mark_skip_decl, mark_skip_ref] = jump_mark()
+            const body = [...read_ident_stmt(), "return"]
+            const body_code = t_compound({ ...ctx, function: func_name }, body)
 
+            output += `jump ${mark_skip_ref} always\n` + func_jump_mark(func_name).decl + body_code + mark_skip_decl
+            functions.set(func_name, { name: func_name, args: args })
+            continue
         }
 
-        output += t_line(l)
+        output += t_line(ctx, l)
     }
     return output
 }
@@ -191,19 +217,19 @@ export function resolve_jump_marks(input: string): string {
         }
     }
     for (let i = 0; i < k.length; i++) {
-        k[i] = k[i].replace(/'\w+ /g, (match, index, orig) => {
+        k[i] = k[i].replace(/'[_\w]+($| )/g, (match, index, orig) => {
             const decl = decls[match.trim().substr(1)]
             if (!decl) throw new Error("unknown jump mark reference: " + match);
             return decl.toString() + " "
         })
-
     }
     return k.join("\n") + "end\n"
 }
 
 
-const sourcce_lines = readFileSync(join(__dirname, "../a.py")).toString().split("\n")
-let code = t_compound(sourcce_lines)
+const source_lines = readFileSync(join(__dirname, "../a.py")).toString().split("\n")
+let code = t_compound({}, source_lines)
+console.log(code);
 code = resolve_jump_marks(code)
 console.log(code);
 

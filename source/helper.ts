@@ -1,6 +1,13 @@
 
-export const MASM_COUNTER = "counter"
+export const MASM_PC = "counter"
 export const MASM_TICK = "tick"
+
+export function jump_mark_decl(n: string) {
+    return "@" + n + " "
+}
+export function jump_mark_ref(n: string) {
+    return "'" + n
+}
 
 let temp_var_counter = 0
 export function temp_var(): string {
@@ -8,17 +15,17 @@ export function temp_var(): string {
 }
 let jump_mark_counter = 0
 export function jump_mark(): [string, string] {
-    return [`@mark${jump_mark_counter} `, `'mark${jump_mark_counter++}`]
+    return [jump_mark_decl(`mark${jump_mark_counter}`), jump_mark_ref(`mark${jump_mark_counter++}`)]
 }
 
 export function func_return(f: string): string {
-    return `__func_stack_${f}`
+    return `__func_return_${f}`
 }
-export function func_label(f: string): string {
-    return `__func_${f}`
+export function func_jump_mark(f: string): { ref: string, decl: string } {
+    return { ref: jump_mark_ref(`func_${f}`), decl: jump_mark_decl(`func_${f}`) }
 }
 export function func_return_value(f: string): string {
-    return `__func_return_${f}`
+    return `__return`
 }
 
 export function split1(s: string, sep: string): [string, string | undefined] {
