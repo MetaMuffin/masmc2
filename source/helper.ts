@@ -55,3 +55,16 @@ export function splitbr(s: string, sep: string): string[] {
     if (b.length > 0) f.push(b)
     return f
 }
+
+export function snake_to_camel(a: string): string {
+    let b = "", u = false
+    for (let c of a) {
+        if (c == "_") u = true
+        else {
+            if (u) b += c.toUpperCase()
+            else b += c.toLowerCase()
+            u = false
+        }
+    }
+    return b
+}

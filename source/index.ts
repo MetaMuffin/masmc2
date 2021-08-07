@@ -1,6 +1,6 @@
 import { readFileSync } from "fs";
 import { join } from "path/posix";
-import { BUILTIN_FUNCTIONS } from "./builtins";
+import { builtin_constant, BUILTIN_FUNCTIONS } from "./builtins";
 import { func_jump_mark, func_return, func_return_value, jump_mark, MASM_PC, split1, split1br, splitbr, temp_var } from "./helper";
 
 const ops = [
@@ -38,8 +38,8 @@ export interface TContext {
     loop_break?: string
 }
 
-export function assign_target(value: string, target?: string): TResult {
-    return target ? { code: `set ${target} ${value}\n`, result: target } : { code: "", result: value }
+export function assign_target(value: string, target?: string, extra_code?: string): TResult {
+    return target ? { code: (extra_code ?? "") + `set ${target} ${value}\n`, result: target } : { code: "", result: value }
 }
 
 export function t_expr(ctx: TContext, expr: string, target?: string): TResult {
@@ -63,12 +63,25 @@ export function t_expr(ctx: TContext, expr: string, target?: string): TResult {
 
     if (/^\w+\(.+\)$/.test(expr)) {
         const func_name = split1(expr, "(")[0]
-        const args_raw = split1(expr, "(")[1]?.split(")").join("")
+        let args_raw = split1(expr, "(")[1]
         if (!args_raw) throw new Error("aaaaaaaa " + expr);
+        args_raw = args_raw.substring(0, args_raw.length - 1)
         const args = splitbr(args_raw, ",")
 
         const builtin = BUILTIN_FUNCTIONS[func_name]
-        if (builtin) { return builtin(...args) }
+        if (builtin) {
+            let args_v = [], output = ""
+            for (const a of args) {
+                const av = t_expr(ctx, a)
+                args_v.push(av.result)
+                output += av.code
+            }
+            const r = builtin(...args_v)
+            return {
+                result: target_temp,
+                code: output + r.code + `set ${target_temp} ${r.result}\n`
+            }
+        }
 
         const func = functions.get(func_name)
         if (!func) throw new Error(`unknown function "${func_name}" in expression "${expr}"`);
@@ -82,10 +95,17 @@ export function t_expr(ctx: TContext, expr: string, target?: string): TResult {
         }
         output += `op add ${func_return(func_name)} ${MASM_PC} 2\n`
         output += `jump ${func_jump_mark(func_name).ref} always\n`
-        return { code: output, result: func_return_value(func_name) }
+        return {
+            result: target_temp,
+            code: output + `set ${target_temp} ${func_return_value(func_name)}\n`
+        }
     }
 
-    if (splitbr(expr, " ").length < 2) return assign_target(expr, target)
+    if (splitbr(expr, " ").length < 2) {
+        const builtin_const = builtin_constant(expr)
+        if (builtin_const) expr = builtin_const
+        return assign_target(expr, target)
+    }
     throw new Error("invalid expression: " + expr);
 }
 
@@ -131,6 +151,9 @@ export function t_compound(ctx: TContext, lines: string[]): string {
             i--
             return sub
         }
+
+        if (l.startsWith("import ")) continue
+        if (l.startsWith("from ")) continue
 
         if (l.startsWith("if ")) {
             const condition = t_expr(ctx, l.substring(3, l.length - 1))
@@ -227,9 +250,8 @@ export function resolve_jump_marks(input: string): string {
 }
 
 
-const source_lines = readFileSync(join(__dirname, "../a.py")).toString().split("\n")
+const source_lines = readFileSync(process.argv[2]).toString().split("\n")
 let code = t_compound({}, source_lines)
-console.log(code);
 code = resolve_jump_marks(code)
 console.log(code);
 
