@@ -6,6 +6,10 @@ import { jump_mark, split1br, temp_var } from "./helper";
 const ops = [
     ["==", "equal"],
     ["!=", "not"],
+    ["<", "lessThan"],
+    [">", "greaterThan"],
+    ["<=", "greaterEq"],
+    [">=", "lessThanEq"],
     ["+", "add"],
     ["-", "sub"],
     ["*", "mul"],
@@ -67,7 +71,7 @@ export function t_line(line: string): string {
     [vari, expr] = split1br(line, "=");
     if (expr) return t_expr(expr, vari).code;
 
-    throw new Error("aaaaaaaaaa");
+    throw new Error("aaaaaaaaaa: " + line);
 }
 
 export function t_compound(lines: string[]): string {
@@ -78,7 +82,7 @@ export function t_compound(lines: string[]): string {
         const read_ident_stmt = () => {
             i++
             let sub = []
-            while (lines[i].startsWith("    ")) sub.push(lines[i++].substr(4))
+            while (lines[i]?.startsWith("    ")) sub.push(lines[i++].substr(4))
             i--
             return sub
         }
@@ -86,14 +90,34 @@ export function t_compound(lines: string[]): string {
         if (l.startsWith("if")) {
             const condition = t_expr(l.substring(3, l.length - 1))
             const [mark_decl, mark_ref] = jump_mark()
+            const [mark_decl_else, mark_ref_else] = jump_mark()
             const body = read_ident_stmt()
-            // if (lines[i+1].startsWith("else"))
             const body_code = t_compound(body)
-            output += condition.code + `jump ${mark_ref} equal ${condition.result} 1\n`
-            output += body_code + mark_decl
+            const has_else = lines[i + 1]?.startsWith("else")
+            output += condition.code + `jump ${mark_ref} notEqual ${condition.result} 1\n`
+            output += body_code
+            if (has_else) output += `jump ${mark_ref_else} always\n`
+            output += mark_decl
+            if (has_else) {
+                i++; const else_body = read_ident_stmt()
+                const else_body_code = t_compound(else_body)
+                output += else_body_code + mark_decl_else
+            }
             continue
         }
-        
+
+        if (l.startsWith("while")) {
+            const condition = t_expr(l.substring("while ".length, l.length - 1))
+            const [mark_start_decl, mark_start_ref] = jump_mark()
+            const [mark_end_decl, mark_end_ref] = jump_mark()
+            const body = read_ident_stmt()
+            const body_code = t_compound(body)
+
+            output += condition.code + mark_start_decl + `jump ${mark_end_ref} notEqual ${condition.result} 1\n`
+            output += body_code + `jump ${mark_start_ref} always\n` + mark_end_decl
+            continue
+        }
+
 
         output += t_line(l)
     }
