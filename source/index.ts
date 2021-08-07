@@ -5,7 +5,7 @@ import { func_jump_mark, func_return, func_return_value, jump_mark, MASM_PC, spl
 
 const ops = [
     ["==", "equal"],
-    ["!=", "not"],
+    ["!=", "notEqual"],
     ["<", "lessThan"],
     [">", "greaterThan"],
     ["<=", "greaterEq"],

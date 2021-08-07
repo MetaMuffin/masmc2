@@ -38,7 +38,7 @@ export const BUILTIN_FUNCTIONS: { [key: string]: (...args: string[]) => TResult 
     draw_image: builtin_default("draw image"),
 
     print: builtin_default("print"),
-    print_flush: builtin_default("print"),
+    print_flush: builtin_default("printflush"),
 
     get_link: builtin_default("getlink __return"),
 
